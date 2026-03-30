@@ -67,19 +67,25 @@ app.post('/api/spaceship/update-ns', async (req, res) => {
         'X-Api-Secret': ssApiSecret,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ hosts: nameservers }),
+      body: JSON.stringify({ provider: 'custom', hosts: nameservers }),
     });
 
-    if (response.status === 204) {
-      return res.json({ success: true });
+    if (response.status === 204 || response.status === 200) {
+      let data = null;
+      try { data = await response.json(); } catch (_) {}
+      return res.json({ success: true, data });
     }
 
-    const data = await response.json();
-    if (response.ok) {
-      res.json({ success: true, data });
-    } else {
-      res.json({ success: false, error: data?.message || data?.errors?.[0]?.message || `HTTP ${response.status}` });
-    }
+    let rawText = '';
+    try { rawText = await response.text(); } catch (_) {}
+    let data = null;
+    try { data = JSON.parse(rawText); } catch (_) {}
+
+    console.error(`Spaceship NS update failed [${response.status}]:`, rawText);
+    res.json({
+      success: false,
+      error: data?.detail || data?.message || data?.errors?.[0]?.message || `HTTP ${response.status}: ${rawText.slice(0, 200)}`
+    });
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
