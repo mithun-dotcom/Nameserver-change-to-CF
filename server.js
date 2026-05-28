@@ -80,24 +80,41 @@ async function updatePorkbun(domain, nameservers, apiKey, secretApiKey) {
 
 // ─── DREAMHOST ────────────────────────────────────────────────────────────────
 async function updateDreamhost(domain, nameservers, apiKey) {
-  // DreamHost doesn't have a direct NS update API — we remove old NS and add new
   const base = `https://api.dreamhost.com/?key=${apiKey}&format=json`;
 
-  // List current nameservers
-  const listRes = await axios.get(`${base}&cmd=dns.list_records&type=NS&editable=1`);
-  const records = listRes.data.data || [];
-  const domainNs = records.filter((r) => r.zone === domain && r.type === "NS");
+  // List all DNS records
+  const listRes = await axios.get(`${base}&cmd=dns.list_records`);
+  const payload = listRes.data;
 
-  // Remove old ones
-  for (const record of domainNs) {
-    await axios.get(
-      `${base}&cmd=dns.remove_record&record=${encodeURIComponent(record.record)}&type=NS&value=${encodeURIComponent(record.value)}`
-    );
+  // DreamHost returns { result: "success", data: [...] } or { result: "error", ... }
+  if (payload.result !== "success") {
+    throw new Error("DreamHost list_records failed: " + (payload.reason || JSON.stringify(payload)));
   }
 
-  // Add new ones
+  const records = Array.isArray(payload.data) ? payload.data : [];
+  // Filter editable NS records for this domain
+  const domainNs = records.filter(
+    (r) => r.type === "NS" && r.editable == 1 &&
+           (r.zone === domain || r.record === domain || r.record === "")
+  );
+
+  // Remove old editable NS records
+  for (const record of domainNs) {
+    try {
+      await axios.get(
+        `${base}&cmd=dns.remove_record&record=${encodeURIComponent(record.record)}&type=NS&value=${encodeURIComponent(record.value)}`
+      );
+    } catch(e) { /* ignore remove errors, best effort */ }
+  }
+
+  // Add new Cloudflare NS records
   for (const ns of nameservers) {
-    await axios.get(`${base}&cmd=dns.add_record&record=${encodeURIComponent(domain)}&type=NS&value=${encodeURIComponent(ns)}`);
+    const addRes = await axios.get(
+      `${base}&cmd=dns.add_record&record=${encodeURIComponent(domain)}&type=NS&value=${encodeURIComponent(ns)}`
+    );
+    if (addRes.data.result !== "success") {
+      throw new Error(`Failed to add NS ${ns}: ${addRes.data.reason || JSON.stringify(addRes.data)}`);
+    }
   }
 
   return { success: true, nameservers };
