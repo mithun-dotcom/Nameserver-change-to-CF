@@ -1,222 +1,101 @@
+// Cloudflare ⇆ Spaceship onboarder — backend (Render)
+// Proxies API calls so the browser never hits Cloudflare/Spaceship directly (no CORS issues).
+// Credentials are passed per-request and never stored or logged.
+
 const express = require("express");
-const cors = require("cors");
-const axios = require("axios");
-
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
-// ─── Cloudflare: get nameservers for a zone ───────────────────────────────────
-async function getCloudflareNameservers(domain, cfEmail, cfApiKey) {
-  // 1. Find the zone
-  const zonesRes = await axios.get("https://api.cloudflare.com/client/v4/zones", {
-    params: { name: domain },
-    headers: {
-      "X-Auth-Email": cfEmail,
-      "X-Auth-Key": cfApiKey,
-      "Content-Type": "application/json",
-    },
+// --- CORS ---
+// Set ALLOWED_ORIGIN in Render to your Netlify URL (e.g. https://your-site.netlify.app).
+// Defaults to "*" so it works before you lock it down.
+const ORIGIN = process.env.ALLOWED_ORIGIN || "*";
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", ORIGIN);
+  res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
+const CF_API = "https://api.cloudflare.com/client/v4";
+const SS_API = "https://spaceship.dev/api/v1";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// --- Cloudflare: create the zone, or fetch it if it already exists ---
+async function cfCreateOrGetZone(domain, token, accountId, type) {
+  const headers = { Authorization: "Bearer " + token, "Content-Type": "application/json" };
+
+  const res = await fetch(CF_API + "/zones", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name: domain, account: { id: accountId }, type }),
   });
-  if (!zonesRes.data.success || zonesRes.data.result.length === 0) {
-    // Try to create the zone
-    const createRes = await axios.post(
-      "https://api.cloudflare.com/client/v4/zones",
-      { name: domain, jump_start: false },
-      {
-        headers: {
-          "X-Auth-Email": cfEmail,
-          "X-Auth-Key": cfApiKey,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-    if (!createRes.data.success) {
-      throw new Error("Failed to create Cloudflare zone: " + JSON.stringify(createRes.data.errors));
+  let data = {};
+  try { data = await res.json(); } catch {}
+
+  if (data.success) return { zone: data.result, created: true };
+
+  // 1061 = zone already exists in this account → look it up and reuse it
+  const exists = (data.errors || []).some((e) => e.code === 1061);
+  if (exists) {
+    const r2 = await fetch(CF_API + "/zones?name=" + encodeURIComponent(domain), { headers });
+    let d2 = {};
+    try { d2 = await r2.json(); } catch {}
+    if (d2.success && d2.result && d2.result.length) return { zone: d2.result[0], created: false };
+  }
+
+  const msg = (data.errors || []).map((e) => `${e.code}: ${e.message}`).join("; ") || "zone create failed";
+  throw new Error("Cloudflare — " + msg);
+}
+
+// --- Spaceship: repoint nameservers to custom (Cloudflare) hosts, with 429 backoff ---
+async function ssSetNameservers(domain, hosts, key, secret) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch(`${SS_API}/domains/${domain}/nameservers`, {
+      method: "PUT",
+      headers: { "X-API-Key": key, "X-API-Secret": secret, "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "custom", hosts }),
+    });
+    if (res.ok) return;
+    if (res.status === 429) {
+      const wait = parseInt(res.headers.get("retry-after") || "5", 10) * 1000;
+      await sleep(wait);
+      continue;
     }
-    return createRes.data.result.name_servers;
+    let detail = "";
+    try { detail = (await res.json()).detail || ""; } catch {}
+    throw new Error(`Spaceship — NS update ${res.status}${detail ? " · " + detail : ""}`);
   }
-  return zonesRes.data.result[0].name_servers;
+  throw new Error("Spaceship — rate limited (429) after retries");
 }
 
-// ─── NAMECHEAP ────────────────────────────────────────────────────────────────
-async function updateNamecheap(domain, nameservers, apiUser, apiKey, clientIp) {
-  const [sld, tld] = domain.split(".");
-  const ns = nameservers.map((n, i) => `Nameserver${i + 1}=${encodeURIComponent(n)}`).join("&");
-  const url = `https://api.namecheap.com/xml.response?ApiUser=${apiUser}&ApiKey=${apiKey}&UserName=${apiUser}&ClientIp=${clientIp}&Command=namecheap.domains.dns.setCustom&SLD=${sld}&TLD=${tld}&${ns}`;
-  const res = await axios.get(url);
-  if (res.data.includes('Status="ERROR"') || res.data.includes("errors")) {
-    throw new Error("Namecheap API error: " + res.data);
+// --- Health check ---
+app.get("/", (_req, res) => res.json({ ok: true, service: "cf-spaceship-onboarder" }));
+
+// --- Onboard a single domain: create CF zone → set Spaceship NS ---
+app.post("/api/onboard", async (req, res) => {
+  const { domain, cfToken, cfAccount, ssKey, ssSecret, type } = req.body || {};
+  if (!domain || !cfToken || !cfAccount || !ssKey || !ssSecret) {
+    return res.status(400).json({ status: "error", info: "Missing required fields" });
   }
-  return { success: true, raw: res.data };
-}
-
-// ─── GODADDY ──────────────────────────────────────────────────────────────────
-async function updateGodaddy(domain, nameservers, apiKey, apiSecret) {
-  const nsPayload = nameservers.map((ns) => ({ nameServer: ns }));
-  const res = await axios.put(
-    `https://api.godaddy.com/v1/domains/${domain}/nameservers`,
-    { nameServers: nameservers },
-    {
-      headers: {
-        Authorization: `sso-key ${apiKey}:${apiSecret}`,
-        "Content-Type": "application/json",
-      },
-    }
-  );
-  return { success: true, status: res.status };
-}
-
-// ─── PORKBUN ──────────────────────────────────────────────────────────────────
-async function updatePorkbun(domain, nameservers, apiKey, secretApiKey) {
-  const res = await axios.post(
-    `https://porkbun.com/api/json/v3/domain/updateNs/${domain}`,
-    { apikey: apiKey, secretapikey: secretApiKey, ns: nameservers }
-  );
-  if (res.data.status !== "SUCCESS") {
-    throw new Error("Porkbun error: " + JSON.stringify(res.data));
-  }
-  return { success: true, message: res.data.message };
-}
-
-// ─── DREAMHOST ────────────────────────────────────────────────────────────────
-async function updateDreamhost(domain, nameservers, apiKey) {
-  const base = `https://api.dreamhost.com/?key=${apiKey}&format=json`;
-
-  // List all DNS records
-  const listRes = await axios.get(`${base}&cmd=dns.list_records`);
-  const payload = listRes.data;
-
-  // DreamHost returns { result: "success", data: [...] } or { result: "error", ... }
-  if (payload.result !== "success") {
-    throw new Error("DreamHost list_records failed: " + (payload.reason || JSON.stringify(payload)));
-  }
-
-  const records = Array.isArray(payload.data) ? payload.data : [];
-  // Filter editable NS records for this domain
-  const domainNs = records.filter(
-    (r) => r.type === "NS" && r.editable == 1 &&
-           (r.zone === domain || r.record === domain || r.record === "")
-  );
-
-  // Remove old editable NS records
-  for (const record of domainNs) {
-    try {
-      await axios.get(
-        `${base}&cmd=dns.remove_record&record=${encodeURIComponent(record.record)}&type=NS&value=${encodeURIComponent(record.value)}`
-      );
-    } catch(e) { /* ignore remove errors, best effort */ }
-  }
-
-  // Add new Cloudflare NS records
-  for (const ns of nameservers) {
-    const addRes = await axios.get(
-      `${base}&cmd=dns.add_record&record=${encodeURIComponent(domain)}&type=NS&value=${encodeURIComponent(ns)}`
-    );
-    if (addRes.data.result !== "success") {
-      throw new Error(`Failed to add NS ${ns}: ${addRes.data.reason || JSON.stringify(addRes.data)}`);
-    }
-  }
-
-  return { success: true, nameservers };
-}
-
-// ─── DYNADOT ──────────────────────────────────────────────────────────────────
-async function updateDynadot(domain, nameservers, apiKey) {
-  const nsParams = nameservers
-    .map((ns, i) => `ns${i}=${encodeURIComponent(ns)}`)
-    .join("&");
-  const url = `https://api.dynadot.com/api3.xml?key=${apiKey}&command=set_ns&domain=${domain}&${nsParams}`;
-  const res = await axios.get(url);
-  if (res.data.includes("<Status>error</Status>") || res.data.includes("<Status>Error</Status>")) {
-    throw new Error("Dynadot API error: " + res.data);
-  }
-  return { success: true, raw: res.data };
-}
-
-// ─── SPACESHIP ────────────────────────────────────────────────────────────────
-async function updateSpaceship(domain, nameservers, apiKey, apiSecret) {
-  const res = await axios.put(
-    `https://spaceship.dev/api/v1/dns/nameservers/${domain}`,
-    { nameservers: nameservers.map((host) => ({ host })) },
-    {
-      headers: {
-        "X-API-Key": apiKey,
-        "X-API-Secret": apiSecret,
-        "Content-Type": "application/json",
-      },
-    }
-  );
-  return { success: true, status: res.status };
-}
-
-// ─── Main Route ───────────────────────────────────────────────────────────────
-app.post("/api/update-nameservers", async (req, res) => {
-  const {
-    registrar,
-    domain,
-    cfEmail,
-    cfApiKey,
-    // registrar-specific
-    credentials,
-  } = req.body;
-
-  if (!registrar || !domain || !cfEmail || !cfApiKey || !credentials) {
-    return res.status(400).json({ success: false, error: "Missing required fields." });
-  }
-
   try {
-    // Step 1: Get Cloudflare nameservers
-    const nameservers = await getCloudflareNameservers(domain, cfEmail, cfApiKey);
-
-    // Step 2: Update at registrar
-    let result;
-    switch (registrar) {
-      case "namecheap":
-        result = await updateNamecheap(
-          domain,
-          nameservers,
-          credentials.apiUser,
-          credentials.apiKey,
-          credentials.clientIp
-        );
-        break;
-      case "godaddy":
-        result = await updateGodaddy(domain, nameservers, credentials.apiKey, credentials.apiSecret);
-        break;
-      case "porkbun":
-        result = await updatePorkbun(domain, nameservers, credentials.apiKey, credentials.secretApiKey);
-        break;
-      case "dreamhost":
-        result = await updateDreamhost(domain, nameservers, credentials.apiKey);
-        break;
-      case "dynadot":
-        result = await updateDynadot(domain, nameservers, credentials.apiKey);
-        break;
-      case "spaceship":
-        result = await updateSpaceship(domain, nameservers, credentials.apiKey, credentials.apiSecret);
-        break;
-      default:
-        return res.status(400).json({ success: false, error: `Unknown registrar: ${registrar}` });
+    const { zone, created } = await cfCreateOrGetZone(domain, cfToken, cfAccount, type || "full");
+    const ns = zone.name_servers || [];
+    if (ns.length < 2) {
+      throw new Error("Cloudflare returned no nameservers (zone status: " + zone.status + ")");
     }
-
-    return res.json({
-      success: true,
-      domain,
-      registrar,
-      nameservers,
-      result,
+    await ssSetNameservers(domain, ns, ssKey, ssSecret);
+    res.json({
+      status: created ? "done" : "exists",
+      info: (created ? "Zone created · " : "Zone existed · ") + "NS → " + ns.join(", "),
+      nameservers: ns,
     });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({
-      success: false,
-      error: err.message || "Unknown error",
-    });
+    // 200 with an error payload so the frontend can render it per-row
+    res.json({ status: "error", info: err.message });
   }
 });
 
-// ─── Health check ─────────────────────────────────────────────────────────────
-app.get("/health", (_, res) => res.json({ status: "ok" }));
-
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("cf-spaceship-onboarder listening on " + PORT));
