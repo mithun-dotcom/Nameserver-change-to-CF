@@ -133,9 +133,25 @@ async function setDynadot({ domain, ns, creds }) {
   const p = new URLSearchParams({ key, command: "set_ns", domain });
   ns.forEach((n, i) => p.append("ns" + i, n));
   const res = await fetch(`https://api.dynadot.com/api3.json?${p}`);
-  const j = await res.json();
-  if (j?.SetNsResponse?.ResponseCode === "0") return "NS set at registrar";
-  throw new Error(j?.SetNsResponse?.Error || "Dynadot API error");
+
+  const raw = await res.text();
+  let j;
+  try { j = JSON.parse(raw); } catch { throw new Error(`Dynadot returned non-JSON: ${raw.slice(0, 120)}`); }
+
+  // Dynadot's set_ns response nests the result under SetNsResponse.
+  // Success is SuccessCode "0" (usually inside SetNsHeader) and/or Status "success".
+  const r = j?.SetNsResponse || {};
+  const header = r.SetNsHeader || r;
+  const code = header.SuccessCode ?? header.ResponseCode;
+  const status = (header.Status || "").toString().toLowerCase();
+
+  if (code === "0" || code === 0 || status === "success") {
+    return "NS set at registrar";
+  }
+
+  // Surface Dynadot's real error text so it's not a generic message
+  const errMsg = header.Error || r.Error || j.Error || j.error || `Dynadot rejected the request (code ${code ?? "?"})`;
+  throw new Error(errMsg);
 }
 
 const REGISTRARS = {
@@ -154,14 +170,20 @@ app.post("/api/process", async (req, res) => {
   const handler = REGISTRARS[registrar];
   if (!handler) return res.status(400).json({ ok: false, message: "Unknown registrar" });
 
+  let ns = [];
   try {
     // 1. Get nameservers from Cloudflare
-    const ns = await getCloudflareNS({ domain, cfToken, cfAccount, zoneType });
-    // 2. Push them to the registrar
+    ns = await getCloudflareNS({ domain, cfToken, cfAccount, zoneType });
+  } catch (err) {
+    return res.json({ ok: false, ns: [], message: `Cloudflare: ${err.message}` });
+  }
+
+  try {
+    // 2. Push them to the registrar (return ns so the UI shows what CF assigned)
     const message = await handler({ domain, ns, creds: creds || {} });
     return res.json({ ok: true, ns, message });
   } catch (err) {
-    return res.json({ ok: false, message: err.message || "Unknown error" });
+    return res.json({ ok: false, ns, message: err.message || "Unknown error" });
   }
 });
 
