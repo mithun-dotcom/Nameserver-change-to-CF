@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>NS Bulk Updater</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --green: #15803d;
+    --green-dark: #166534;
+    --green-light: #f0fdf4;
+    --green-border: #bbf7d0;
+    --bg: #f8fafc;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --text: #1e293b;
+    --muted: #64748b;
+    --faint: #94a3b8;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+    padding: 48px 16px 80px;
+  }
+
+  .wrap { max-width: 760px; margin: 0 auto; }
+
+  h1 { font-size: 24px; font-weight: 700; color: var(--text); margin-bottom: 4px; letter-spacing: -0.3px; }
+  .subtitle { font-size: 13px; color: var(--muted); margin-bottom: 32px; }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 26px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+  .card-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 18px; display: flex; align-items: center; gap: 10px; }
+  .card-title .num { width: 22px; height: 22px; background: var(--green); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; flex-shrink: 0; }
+
+  .flow-banner { background: var(--green-light); border: 1px solid var(--green-border); border-radius: 12px; padding: 16px 18px; margin-bottom: 18px; font-size: 13px; color: var(--green-dark); line-height: 1.7; }
+  .flow-banner strong { color: var(--green); font-weight: 700; }
+  .flow-arrow { color: var(--faint); margin: 0 6px; }
+
+  .reg-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 22px; }
+  .reg-tab { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: #fff; color: var(--muted); font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+  .reg-tab:hover { border-color: var(--green); color: var(--green); }
+  .reg-tab.active { border-color: var(--green); background: var(--green); color: #fff; }
+
+  .cred-panel { display: none; }
+  .cred-panel.active { display: block; }
+
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  .row.three { grid-template-columns: 1fr 1fr 1fr; }
+  .row.one { grid-template-columns: 1fr; }
+  .row:last-child { margin-bottom: 0; }
+
+  .field { display: flex; flex-direction: column; gap: 7px; }
+  .field label { font-size: 12px; font-weight: 600; color: var(--text); }
+  .field input, .field select { background: #fff; border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: inherit; font-size: 13px; padding: 10px 13px; outline: none; transition: border-color 0.15s, box-shadow 0.15s; }
+  .field input:focus, .field select:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(21,128,61,0.1); }
+  .field input::placeholder { color: var(--faint); }
+
+  .hint { font-size: 12px; color: var(--muted); margin-top: -3px; line-height: 1.6; }
+  .hint span { color: var(--green); font-weight: 600; }
+
+  .alert { font-size: 12px; padding: 11px 14px; border-radius: 8px; margin-bottom: 14px; line-height: 1.6; }
+  .alert-warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+  .alert-info { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+
+  .domain-area { background: #fff; border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: inherit; font-size: 13px; padding: 12px 14px; width: 100%; min-height: 130px; resize: vertical; outline: none; transition: border-color 0.15s, box-shadow 0.15s; line-height: 1.7; }
+  .domain-area:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(21,128,61,0.1); }
+  .domain-area::placeholder { color: var(--faint); }
+
+  .upload-zone { border: 1.5px dashed var(--border); border-radius: 8px; padding: 18px; text-align: center; cursor: pointer; transition: all 0.15s; position: relative; margin-top: 10px; color: var(--muted); font-size: 13px; }
+  .upload-zone:hover, .upload-zone.drag { border-color: var(--green); color: var(--green); background: var(--green-light); }
+  .upload-zone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+  .options-row { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .options-row label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+  .options-row input[type=checkbox] { accent-color: var(--green); width: 15px; height: 15px; }
+  .concurrency-wrap { display: flex; align-items: center; gap: 8px; }
+  .concurrency-wrap input[type=number] { background: #fff; border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: inherit; font-size: 13px; padding: 5px 9px; width: 58px; outline: none; }
+  .concurrency-wrap input[type=number]:focus { border-color: var(--green); }
+
+  .run-btn { width: 100%; padding: 15px; background: var(--green); border: none; border-radius: 10px; color: #fff; font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer; transition: all 0.15s; margin-top: 4px; box-shadow: 0 2px 8px rgba(21,128,61,0.2); }
+  .run-btn:hover { background: var(--green-dark); box-shadow: 0 4px 14px rgba(21,128,61,0.3); }
+  .run-btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+
+  .progress-wrap { margin: 18px 0; display: none; }
+  .progress-bar { height: 6px; background: var(--border); border-radius: 6px; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--green); border-radius: 6px; transition: width 0.3s ease; width: 0%; }
+  .progress-label { font-size: 12px; color: var(--muted); margin-top: 7px; text-align: center; }
+
+  .stats-row { display: flex; gap: 12px; margin: 16px 0; }
+  .stat { flex: 1; background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 14px; text-align: center; }
+  .stat-n { font-size: 26px; font-weight: 700; line-height: 1; }
+  .stat-l { font-size: 11px; color: var(--muted); margin-top: 5px; font-weight: 500; }
+  .c-total { color: #2563eb; } .c-ok { color: var(--green); } .c-err { color: #dc2626; } .c-pending { color: var(--faint); }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; margin-top: 16px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { background: #f8fafc; font-size: 11px; font-weight: 600; color: var(--muted); padding: 11px 13px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 11px 13px; font-size: 13px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #fafbfc; }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .pill-pending { background: #f1f5f9; color: var(--muted); }
+  .pill-running { background: #eff6ff; color: #2563eb; }
+  .pill-ok { background: var(--green-light); color: var(--green); }
+  .pill-err { background: #fef2f2; color: #dc2626; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+  .dot.blink { animation: blink 1s infinite; }
+
+  .log { background: #f8fafc; border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px; font-size: 12px; max-height: 190px; overflow-y: auto; line-height: 1.9; margin-top: 16px; font-family: 'SF Mono', Menlo, Consolas, monospace; }
+  .ll { display: flex; gap: 10px; }
+  .lt { color: var(--faint); flex-shrink: 0; }
+  .lok { color: var(--green); } .lerr { color: #dc2626; } .linf { color: #2563eb; } .lwarn { color: #d97706; }
+
+  .bot-actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .sec-btn { padding: 9px 18px; border-radius: 8px; border: 1px solid var(--border); background: #fff; color: var(--text); font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
+  .sec-btn:hover { border-color: var(--green); color: var(--green); }
+
+  .ns-cell { font-size: 12px; color: var(--green); line-height: 1.5; font-family: 'SF Mono', Menlo, Consolas, monospace; }
+
+  @media (max-width: 600px) { .row, .row.three { grid-template-columns: 1fr; } .stats-row { flex-wrap: wrap; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>NS Bulk Updater</h1>
+  <p class="subtitle">Auto-fetch nameservers from Cloudflare, then push to your registrar</p>
+
+  <div class="flow-banner">
+    <strong>How it works:</strong><br/>
+    ① Add or find each domain in Cloudflare
+    <span class="flow-arrow">→</span>
+    ② Cloudflare returns its assigned nameservers
+    <span class="flow-arrow">→</span>
+    ③ Push those nameservers to your registrar automatically.
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="num">1</span> Cloudflare Credentials</div>
+    <div class="row one">
+      <div class="field">
+        <label>Cloudflare API Token (Bearer)</label>
+        <input id="cf_token" type="password" placeholder="Scoped API token — not the Global API Key"/>
+        <p class="hint">Needs <span>Zone → Zone → Edit</span> permission, scoped to your account.</p>
+      </div>
+    </div>
+    <div class="row one" style="margin-top:14px;">
+      <div class="field">
+        <label>Cloudflare Account ID</label>
+        <input id="cf_account" placeholder="32-character hex ID"/>
+        <p class="hint">Found on any zone's Overview page (right sidebar) or in the dashboard URL.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="num">2</span> Source Registrar Credentials</div>
+
+    <div class="reg-tabs">
+      <button class="reg-tab active" onclick="switchReg('spaceship', this)">Spaceship</button>
+      <button class="reg-tab" onclick="switchReg('namecheap', this)">Namecheap</button>
+      <button class="reg-tab" onclick="switchReg('godaddy', this)">GoDaddy</button>
+      <button class="reg-tab" onclick="switchReg('porkbun', this)">Porkbun</button>
+      <button class="reg-tab" onclick="switchReg('dynadot', this)">Dynadot</button>
+    </div>
+
+    <div class="cred-panel active" id="reg-spaceship">
+      <div class="row">
+        <div class="field"><label>API Key</label><input id="ss_key" placeholder="X-API-Key"/></div>
+        <div class="field"><label>API Secret</label><input id="ss_secret" type="password" placeholder="X-API-Secret"/></div>
+      </div>
+      <p class="hint">Needs scopes <span>domains:read</span> + <span>domains:write</span>.</p>
+    </div>
+
+    <div class="cred-panel" id="reg-namecheap">
+      <div class="alert alert-warn">⚠ Namecheap requires your server's IP to be whitelisted. On Render, whitelist your service's outbound IP (see README).</div>
+      <div class="row three">
+        <div class="field"><label>API Username</label><input id="nc_user" placeholder="your_username"/></div>
+        <div class="field"><label>API Key</label><input id="nc_key" type="password" placeholder="••••••••••••"/></div>
+        <div class="field"><label>Whitelisted IP</label><input id="nc_ip" placeholder="203.0.113.10"/></div>
+      </div>
+    </div>
+
+    <div class="cred-panel" id="reg-godaddy">
+      <div class="alert alert-info">ℹ Get credentials at developer.godaddy.com → API Keys. Use Production keys for live domains.</div>
+      <div class="row">
+        <div class="field"><label>API Key</label><input id="gd_key" type="password" placeholder="••••••••••••"/></div>
+        <div class="field"><label>API Secret</label><input id="gd_secret" type="password" placeholder="••••••••••••"/></div>
+      </div>
+    </div>
+
+    <div class="cred-panel" id="reg-porkbun">
+      <div class="alert alert-info">ℹ Enable API access per-domain at porkbun.com → Domain Management → API Access.</div>
+      <div class="row">
+        <div class="field"><label>API Key</label><input id="pb_key" type="password" placeholder="pk1_••••••••••"/></div>
+        <div class="field"><label>Secret API Key</label><input id="pb_secret" type="password" placeholder="sk1_••••••••••"/></div>
+      </div>
+    </div>
+
+    <div class="cred-panel" id="reg-dynadot">
+      <div class="alert alert-info">ℹ Generate your API key at dynadot.com → Account → API Settings. Rate-limited to 200/day.</div>
+      <div class="row one">
+        <div class="field"><label>API Key</label><input id="dy_key" type="password" placeholder="••••••••••••"/></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="num">3</span> Domains</div>
+    <div class="field">
+      <label>Paste domains (one per line) or load a CSV with a <span style="color:var(--green)">domain</span> header</label>
+      <textarea class="domain-area" id="domainText" placeholder="example.com&#10;mysite.org&#10;another.net"></textarea>
+    </div>
+    <div class="upload-zone" id="uploadZone">
+      <input type="file" accept=".csv,.txt" onchange="handleFile(this)"/>
+      Drop a .csv here or click to browse
+    </div>
+    <div class="options-row">
+      <label><input type="checkbox" id="zoneTypeFull" checked/> Zone type: full</label>
+      <div class="concurrency-wrap">Concurrency <input type="number" id="concurrency" value="3" min="1" max="10"/></div>
+    </div>
+  </div>
+
+  <button class="run-btn" id="runBtn" onclick="runUpdate()">Run Update</button>
+
+  <div id="resultsSection" style="display:none; margin-top:24px;">
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-label" id="progressLabel">0 / 0</div>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat"><div class="stat-n c-total" id="s-total">0</div><div class="stat-l">Total</div></div>
+      <div class="stat"><div class="stat-n c-ok" id="s-ok">0</div><div class="stat-l">Updated</div></div>
+      <div class="stat"><div class="stat-n c-err" id="s-err">0</div><div class="stat-l">Failed</div></div>
+      <div class="stat"><div class="stat-n c-pending" id="s-pend">0</div><div class="stat-l">Pending</div></div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Domain</th><th>Registrar</th><th>CF Nameservers (fetched)</th><th>Status</th><th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="resultBody"></tbody>
+      </table>
+    </div>
+
+    <div class="log" id="logBox"><div class="ll"><span class="lt">—</span><span class="linf">Ready.</span></div></div>
+
+    <div class="bot-actions">
+      <button class="sec-btn" onclick="exportCSV()">Export CSV</button>
+      <button class="sec-btn" onclick="clearResults()">Clear</button>
+    </div>
+  </div>
+
+</div>
+<script>
+let domains = [];
+let currentReg = 'spaceship';
+let running = false;
+
+function switchReg(name, el) {
+  currentReg = name;
+  document.querySelectorAll('.reg-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.querySelectorAll('.cred-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('reg-' + name).classList.add('active');
+}
+
+const uz = document.getElementById('uploadZone');
+uz.addEventListener('dragover', e => { e.preventDefault(); uz.classList.add('drag'); });
+uz.addEventListener('dragleave', () => uz.classList.remove('drag'));
+uz.addEventListener('drop', e => { e.preventDefault(); uz.classList.remove('drag'); if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]); });
+function handleFile(input) { if (input.files[0]) readFile(input.files[0]); }
+function readFile(file) {
+  const r = new FileReader();
+  r.onload = e => {
+    const lines = e.target.result.split('\n').map(l => l.trim()).filter(l => l && l !== 'domain' && !l.startsWith('#'));
+    const ta = document.getElementById('domainText');
+    const existing = ta.value.trim();
+    const parsed = lines.map(l => l.split(',')[0].trim()).filter(l => l.includes('.')).join('\n');
+    ta.value = existing ? existing + '\n' + parsed : parsed;
+    addLog('info', `Loaded ${lines.length} domain(s) from ${file.name}`);
+  };
+  r.readAsText(file);
+}
+
+function parseDomains() {
+  return document.getElementById('domainText').value
+    .split('\n')
+    .map(l => l.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, ''))
+    .filter(l => l && l.includes('.') && l !== 'domain')
+    .map((domain, i) => ({ id: i + 1, domain, ns: [], status: 'pending', message: '—' }));
+}
+
+function renderTable() {
+  document.getElementById('resultBody').innerHTML = domains.map(d => `
+    <tr>
+      <td style="color:var(--faint)">${d.id}</td>
+      <td style="font-weight:600">${d.domain}</td>
+      <td style="color:var(--green);font-weight:500">${currentReg}</td>
+      <td id="ns-${d.id}" class="ns-cell">${d.ns.length ? d.ns.join('<br/>') : '—'}</td>
+      <td id="ps-${d.id}">${pill(d.status)}</td>
+      <td id="pm-${d.id}" style="color:var(--muted)">${d.message}</td>
+    </tr>`).join('') || `<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--faint)">No domains</td></tr>`;
+}
+
+function pill(s) {
+  const m = { pending:['pill-pending','Pending'], running:['pill-running','Working'], ok:['pill-ok','Done'], err:['pill-err','Failed'] };
+  const [cls, label] = m[s] || m.pending;
+  return `<span class="pill ${cls}"><span class="dot${s==='running'?' blink':''}"></span>${label}</span>`;
+}
+
+function setRow(id, status, msg, ns) {
+  const d = domains.find(x => x.id === id);
+  if (d) { d.status = status; d.message = msg; if (ns) d.ns = ns; }
+  const ps = document.getElementById('ps-' + id);
+  const pm = document.getElementById('pm-' + id);
+  const nc = document.getElementById('ns-' + id);
+  if (ps) ps.innerHTML = pill(status);
+  if (pm) pm.textContent = msg;
+  if (nc && ns) nc.innerHTML = ns.join('<br/>');
+}
+
+function updateStats() {
+  document.getElementById('s-total').textContent = domains.length;
+  document.getElementById('s-ok').textContent = domains.filter(d => d.status === 'ok').length;
+  document.getElementById('s-err').textContent = domains.filter(d => d.status === 'err').length;
+  document.getElementById('s-pend').textContent = domains.filter(d => d.status === 'pending' || d.status === 'running').length;
+}
+
+function addLog(type, msg) {
+  const box = document.getElementById('logBox');
+  const t = new Date().toTimeString().slice(0,8);
+  const cls = { info:'linf', ok:'lok', err:'lerr', warn:'lwarn' }[type] || 'linf';
+  box.innerHTML += `<div class="ll"><span class="lt">${t}</span><span class="${cls}">${msg}</span></div>`;
+  box.scrollTop = box.scrollHeight;
+}
+
+// Collect the credentials for the currently selected registrar
+function getCreds() {
+  const v = id => (document.getElementById(id)?.value || '').trim();
+  switch (currentReg) {
+    case 'spaceship': return { key: v('ss_key'), secret: v('ss_secret') };
+    case 'namecheap': return { user: v('nc_user'), key: v('nc_key'), ip: v('nc_ip') };
+    case 'godaddy':   return { key: v('gd_key'), secret: v('gd_secret') };
+    case 'porkbun':   return { key: v('pb_key'), secret: v('pb_secret') };
+    case 'dynadot':   return { key: v('dy_key') };
+    default: return {};
+  }
+}
+
+async function runUpdate() {
+  if (running) return;
+  domains = parseDomains();
+  if (!domains.length) { alert('Please enter at least one domain.'); return; }
+
+  const cfToken = document.getElementById('cf_token').value.trim();
+  const cfAccount = document.getElementById('cf_account').value.trim();
+  const zoneType = document.getElementById('zoneTypeFull').checked ? 'full' : 'partial';
+  const creds = getCreds();
+
+  if (!cfToken || !cfAccount) { alert('Please enter your Cloudflare API token and Account ID.'); return; }
+
+  running = true;
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+
+  document.getElementById('resultsSection').style.display = 'block';
+  document.getElementById('progressWrap').style.display = 'block';
+  document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  renderTable();
+  updateStats();
+  addLog('info', `Starting · ${domains.length} domains · registrar: ${currentReg}`);
+
+  const concurrency = parseInt(document.getElementById('concurrency').value) || 3;
+  let done = 0;
+
+  for (let i = 0; i < domains.length; i += concurrency) {
+    const batch = domains.slice(i, i + concurrency);
+    await Promise.all(batch.map(async d => {
+      setRow(d.id, 'running', 'Processing…');
+      try {
+        const res = await fetch('/api/process', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain: d.domain, registrar: currentReg, cfToken, cfAccount, zoneType, creds })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          setRow(d.id, 'ok', data.message, data.ns);
+          addLog('ok', `${d.domain} → ${data.ns.join(', ')}`);
+        } else {
+          setRow(d.id, 'err', data.message, data.ns);
+          addLog('err', `${d.domain} → ${data.message}`);
+        }
+      } catch (e) {
+        setRow(d.id, 'err', e.message);
+        addLog('err', `${d.domain} → ${e.message}`);
+      }
+      done++;
+      document.getElementById('progressFill').style.width = `${(done / domains.length) * 100}%`;
+      document.getElementById('progressLabel').textContent = `${done} / ${domains.length}`;
+      updateStats();
+    }));
+    if (i + concurrency < domains.length) await new Promise(r => setTimeout(r, 400));
+  }
+
+  running = false;
+  btn.disabled = false;
+  btn.textContent = 'Run Update';
+  const ok = domains.filter(d => d.status === 'ok').length;
+  const fail = domains.filter(d => d.status === 'err').length;
+  addLog('ok', `Complete — ${ok} done, ${fail} failed.`);
+}
+
+function exportCSV() {
+  const rows = [['domain','registrar','cf_ns1','cf_ns2','status','message']];
+  domains.forEach(d => rows.push([d.domain, currentReg, d.ns[0] || '', d.ns[1] || '', d.status, `"${d.message}"`]));
+  const csv = rows.map(r => r.join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download = `ns-update-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+}
+
+function clearResults() {
+  domains = [];
+  document.getElementById('resultBody').innerHTML = '';
+  document.getElementById('logBox').innerHTML = '<div class="ll"><span class="lt">—</span><span class="linf">Cleared.</span></div>';
+  document.getElementById('progressFill').style.width = '0%';
+  ['s-total','s-ok','s-err','s-pend'].forEach(id => document.getElementById(id).textContent = '0');
+  document.getElementById('resultsSection').style.display = 'none';
+}
+</script>
+</body>
+</html>
